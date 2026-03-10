@@ -1,10 +1,16 @@
-import React, { useState, useEffect } from 'react';
-import { generateInfographic, rewriteText, checkApiKeySelection } from './services/geminiService';
+import React, { useEffect, useRef, useState } from 'react';
+import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
+import { clearOpenRouterApiKey, generateInfographic, rewriteText, checkApiKeySelection } from './services/geminiService';
 import { LoadingSpinner } from './components/LoadingSpinner';
 import { ApiKeyPrompt } from './components/ApiKeyPrompt';
-import { GeneratedImage } from './types';
+import { GeneratedImage, GenerationModel, InfographicStyle } from './types';
 
-const INFOGRAPHIC_STYLES = [
+const CUSTOM_STYLES_STORAGE_KEY = 'newsregions_custom_styles';
+const STYLE_OVERRIDES_STORAGE_KEY = 'newsregions_style_overrides';
+const CUSTOM_MODELS_STORAGE_KEY = 'newsregions_custom_models';
+const WATERMARK_SETTINGS_STORAGE_KEY = 'newsregions_watermark_settings';
+
+const INFOGRAPHIC_STYLES: InfographicStyle[] = [
   { id: 'march8', label: '8 Марта', icon: '🌷', prompt: 'Professional festive infographic layout for International Women\'s Day (March 8th). High-quality spring-themed aesthetic featuring delicate floral arrangements (tulips, mimosa, lilies) with soft watercolor textures and gentle sunlight effects. Color palette: Soft pastel pinks, creamy whites, fresh spring greens, and sunny yellows. Visual elements include elegant flowing ribbons, subtle sparkle overlays, and stylized "8" motifs integrated into the design. Typography is a graceful and sophisticated script for main greetings and a clean, modern sans-serif for informational blocks. The overall atmosphere is warm, celebratory, appreciative, and elegant, resembling premium greeting cards or high-end lifestyle magazine features. All text in the image MUST be in Russian (Русский язык).' },
   { id: 'aviation', label: 'Авиа', icon: '✈️', prompt: 'Professional aviation and airline news infographic layout. High-quality travel aesthetic featuring modern commercial aircraft, clear blue skies, and soft white clouds. Background: Aerial views of landscapes, airport terminal glass reflections, or clean sky gradients. Visual elements: Stylized flight paths, boarding pass motifs, airplane silhouettes, and globe icons. Color palette: Sky blue, cloud white, and professional navy blue with silver accents. Typography: Clean, modern sans-serif fonts (like those used in airports). The overall atmosphere is airy, global, and efficient. All text in the image MUST be in Russian (Русский язык).' },
   { id: 'automotive', label: 'Автомобильный', icon: '🚗', prompt: 'Professional automotive news and tips infographic layout. High-quality aesthetic designed for drivers and car enthusiasts. Background: Clean, modern surfaces like asphalt textures, metallic gradients, or blurred city roads. Visual elements: Realistic car silhouettes, steering wheels, road signs, and clear icons representing traffic rules, maintenance tips, or new laws. Color palette: Trustworthy deep blue, metallic grey, and signal red for alerts. Typography: Bold, legible sans-serif fonts (like those used on road signs or car dashboards). The layout is structured to deliver news, advice, or warnings clearly. The overall atmosphere is informative, practical, and road-focused. All text in the image MUST be in Russian (Русский язык).' },
@@ -61,16 +67,88 @@ const ASPECT_RATIOS = [
   { id: '16:9', label: 'Альбом', icon: '🖥️' },
 ];
 
-const MODELS = [
+const MODELS: GenerationModel[] = [
   { id: 'google/gemini-3.1-flash-image-preview', label: 'Nano banana 2', icon: '⚡' },
   { id: 'google/gemini-3-pro-image-preview', label: 'Nano banana pro', icon: '💎' },
 ];
 
+const EMPTY_STYLE_FORM = {
+  id: '',
+  label: '',
+  icon: '🎨',
+  prompt: '',
+};
+
+const EMPTY_MODEL_FORM = {
+  id: '',
+  label: '',
+  icon: '🧠',
+  modelId: '',
+};
+
+const DEFAULT_WATERMARK_SETTINGS = {
+  enabled: true,
+  text: '@newsregions',
+  position: 'bottom-right',
+  opacity: 90,
+};
+
+const loadStoredArray = <T,>(storageKey: string, mapper?: (item: T) => T): T[] => {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  try {
+    const storedValue = window.localStorage.getItem(storageKey);
+    if (!storedValue) {
+      return [];
+    }
+
+    const parsedValue = JSON.parse(storedValue) as T[];
+    if (!Array.isArray(parsedValue)) {
+      return [];
+    }
+
+    return mapper ? parsedValue.map(mapper) : parsedValue;
+  } catch (error) {
+    console.error(`Failed to load data from ${storageKey}:`, error);
+    return [];
+  }
+};
+
+const loadStoredWatermarkSettings = () => {
+  if (typeof window === 'undefined') {
+    return DEFAULT_WATERMARK_SETTINGS;
+  }
+
+  try {
+    const storedValue = window.localStorage.getItem(WATERMARK_SETTINGS_STORAGE_KEY);
+    if (!storedValue) {
+      return DEFAULT_WATERMARK_SETTINGS;
+    }
+
+    const parsedValue = JSON.parse(storedValue);
+    return { ...DEFAULT_WATERMARK_SETTINGS, ...parsedValue };
+  } catch (error) {
+    console.error('Failed to load watermark settings:', error);
+    return DEFAULT_WATERMARK_SETTINGS;
+  }
+};
+
 const App: React.FC = () => {
   const [topic, setTopic] = useState('');
   const [selectedStyle, setSelectedStyle] = useState(INFOGRAPHIC_STYLES[0]);
+  const [customStyles, setCustomStyles] = useState<InfographicStyle[]>(() =>
+    loadStoredArray<InfographicStyle>(CUSTOM_STYLES_STORAGE_KEY, (style) => ({ ...style, isCustom: true }))
+  );
+  const [styleOverrides, setStyleOverrides] = useState<InfographicStyle[]>(() =>
+    loadStoredArray<InfographicStyle>(STYLE_OVERRIDES_STORAGE_KEY)
+  );
   const [selectedRatio, setSelectedRatio] = useState(ASPECT_RATIOS[1]); // Default to 3:4
   const [selectedModel, setSelectedModel] = useState(MODELS[0]);
+  const [customModels, setCustomModels] = useState<GenerationModel[]>(() =>
+    loadStoredArray<GenerationModel>(CUSTOM_MODELS_STORAGE_KEY, (model) => ({ ...model, isCustom: true }))
+  );
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedImage, setGeneratedImage] = useState<GeneratedImage | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +158,23 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'infographic' | 'rewrite'>('infographic');
   const [rewriteInput, setRewriteInput] = useState('');
   const [rewriteOutput, setRewriteOutput] = useState('');
+  const [isStyleManagerOpen, setIsStyleManagerOpen] = useState(false);
+  const [styleForm, setStyleForm] = useState(EMPTY_STYLE_FORM);
+  const [styleFormError, setStyleFormError] = useState('');
+  const [isModelManagerOpen, setIsModelManagerOpen] = useState(false);
+  const [modelForm, setModelForm] = useState(EMPTY_MODEL_FORM);
+  const [modelFormError, setModelFormError] = useState('');
+  const [watermarkSettings, setWatermarkSettings] = useState(loadStoredWatermarkSettings);
+  const [emojiPickerTarget, setEmojiPickerTarget] = useState<'style' | 'model' | null>(null);
+
+  const allStyles = [
+    ...INFOGRAPHIC_STYLES.map((baseStyle) => {
+      const override = styleOverrides.find((style) => style.id === baseStyle.id);
+      return override ? { ...baseStyle, ...override } : baseStyle;
+    }),
+    ...customStyles,
+  ];
+  const allModels = [...MODELS, ...customModels];
 
   useEffect(() => {
     const verifyKey = async () => {
@@ -88,6 +183,239 @@ const App: React.FC = () => {
     };
     verifyKey();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(CUSTOM_STYLES_STORAGE_KEY, JSON.stringify(customStyles));
+  }, [customStyles]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(STYLE_OVERRIDES_STORAGE_KEY, JSON.stringify(styleOverrides));
+  }, [styleOverrides]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(CUSTOM_MODELS_STORAGE_KEY, JSON.stringify(customModels));
+  }, [customModels]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(WATERMARK_SETTINGS_STORAGE_KEY, JSON.stringify(watermarkSettings));
+  }, [watermarkSettings]);
+
+  useEffect(() => {
+    const matchingStyle = allStyles.find((style) => style.id === selectedStyle.id);
+
+    if (!matchingStyle && allStyles.length > 0) {
+      setSelectedStyle(allStyles[0]);
+      return;
+    }
+
+    if (
+      matchingStyle &&
+      (
+        matchingStyle.label !== selectedStyle.label ||
+        matchingStyle.icon !== selectedStyle.icon ||
+        matchingStyle.prompt !== selectedStyle.prompt
+      )
+    ) {
+      setSelectedStyle(matchingStyle);
+    }
+  }, [allStyles, selectedStyle]);
+
+  useEffect(() => {
+    const matchingModel = allModels.find((model) => model.id === selectedModel.id);
+
+    if (!matchingModel && allModels.length > 0) {
+      setSelectedModel(allModels[0]);
+      return;
+    }
+
+    if (
+      matchingModel &&
+      (
+        matchingModel.label !== selectedModel.label ||
+        matchingModel.icon !== selectedModel.icon
+      )
+    ) {
+      setSelectedModel(matchingModel);
+    }
+  }, [allModels, selectedModel]);
+
+  const resetStyleForm = () => {
+    setStyleForm(EMPTY_STYLE_FORM);
+    setStyleFormError('');
+  };
+
+  const openCreateStyleModal = () => {
+    resetStyleForm();
+    setIsStyleManagerOpen(true);
+  };
+
+  const openEditStyleModal = (style: InfographicStyle) => {
+    setStyleForm({
+      id: style.id,
+      label: style.label,
+      icon: style.icon,
+      prompt: style.prompt,
+    });
+    setStyleFormError('');
+    setIsStyleManagerOpen(true);
+  };
+
+  const closeStyleModal = () => {
+    setIsStyleManagerOpen(false);
+    setEmojiPickerTarget(null);
+    resetStyleForm();
+  };
+
+  const resetModelForm = () => {
+    setModelForm(EMPTY_MODEL_FORM);
+    setModelFormError('');
+  };
+
+  const openCreateModelModal = () => {
+    resetModelForm();
+    setIsModelManagerOpen(true);
+  };
+
+  const openEditModelModal = (model: GenerationModel) => {
+    setModelForm({
+      id: model.id,
+      label: model.label,
+      icon: model.icon,
+      modelId: model.id,
+    });
+    setModelFormError('');
+    setIsModelManagerOpen(true);
+  };
+
+  const closeModelModal = () => {
+    setIsModelManagerOpen(false);
+    setEmojiPickerTarget(null);
+    resetModelForm();
+  };
+
+  const handleSaveStyle = () => {
+    const label = styleForm.label.trim();
+    const icon = styleForm.icon.trim() || '🎨';
+    const prompt = styleForm.prompt.trim();
+
+    if (!label || !prompt) {
+      setStyleFormError('Заполните название и промпт.');
+      return;
+    }
+
+    if (styleForm.id) {
+      const isBaseStyle = INFOGRAPHIC_STYLES.some((style) => style.id === styleForm.id);
+
+      if (isBaseStyle) {
+        const updatedStyle = { id: styleForm.id, label, icon, prompt };
+        setStyleOverrides((currentOverrides) => {
+          const hasOverride = currentOverrides.some((style) => style.id === styleForm.id);
+          if (hasOverride) {
+            return currentOverrides.map((style) => (style.id === styleForm.id ? updatedStyle : style));
+          }
+          return [...currentOverrides, updatedStyle];
+        });
+      } else {
+        setCustomStyles((currentStyles) =>
+          currentStyles.map((style) =>
+            style.id === styleForm.id ? { ...style, label, icon, prompt, isCustom: true } : style
+          )
+        );
+      }
+
+      if (selectedStyle.id === styleForm.id) {
+        setSelectedStyle((currentStyle) => ({
+          ...currentStyle,
+          label,
+          icon,
+          prompt,
+          isCustom: currentStyle.isCustom,
+        }));
+      }
+    } else {
+      const newStyle: InfographicStyle = {
+        id: `custom-style-${Date.now()}`,
+        label,
+        icon,
+        prompt,
+        isCustom: true,
+      };
+      setCustomStyles((currentStyles) => [newStyle, ...currentStyles]);
+      setSelectedStyle(newStyle);
+    }
+
+    closeStyleModal();
+  };
+
+  const handleDeleteStyle = (styleId: string) => {
+    setCustomStyles((currentStyles) => currentStyles.filter((style) => style.id !== styleId));
+  };
+
+  const handleResetStyle = (styleId: string) => {
+    setStyleOverrides((currentOverrides) => currentOverrides.filter((style) => style.id !== styleId));
+
+    const originalStyle = INFOGRAPHIC_STYLES.find((style) => style.id === styleId);
+    if (originalStyle && selectedStyle.id === styleId) {
+      setSelectedStyle(originalStyle);
+    }
+  };
+
+  const handleSaveModel = () => {
+    const label = modelForm.label.trim();
+    const icon = modelForm.icon.trim() || '🧠';
+    const modelId = modelForm.modelId.trim();
+
+    if (!label || !modelId) {
+      setModelFormError('Заполните название и OpenRouter model id.');
+      return;
+    }
+
+    const newModel: GenerationModel = {
+      id: modelId,
+      label,
+      icon,
+      isCustom: true,
+    };
+
+    setCustomModels((currentModels) => {
+      const withoutCurrent = currentModels.filter((model) => model.id !== modelForm.id);
+      return [newModel, ...withoutCurrent];
+    });
+    setSelectedModel(newModel);
+    closeModelModal();
+  };
+
+  const handleDeleteModel = (modelId: string) => {
+    setCustomModels((currentModels) => currentModels.filter((model) => model.id !== modelId));
+  };
+
+  const handleEmojiSelect = (emojiData: EmojiClickData) => {
+    if (emojiPickerTarget === 'style') {
+      setStyleForm((current) => ({ ...current, icon: emojiData.emoji }));
+    }
+
+    if (emojiPickerTarget === 'model') {
+      setModelForm((current) => ({ ...current, icon: emojiData.emoji }));
+    }
+
+    setEmojiPickerTarget(null);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -167,26 +495,29 @@ const App: React.FC = () => {
         // Draw image
         ctx?.drawImage(img, 0, 0);
         
-        if (ctx) {
-            // Watermark configuration
-            const text = "@newsregions";
-            const fontSize = Math.max(24, img.width * 0.04); // Responsive font size
+        if (ctx && watermarkSettings.enabled && watermarkSettings.text.trim()) {
+            const text = watermarkSettings.text.trim();
+            const fontSize = Math.max(24, img.width * 0.04);
+            const paddingX = img.width * 0.03;
+            const paddingY = img.height * 0.02;
+            const positions = {
+              'bottom-right': { x: img.width - paddingX, y: img.height - paddingY, align: 'right' as CanvasTextAlign, baseline: 'bottom' as CanvasTextBaseline },
+              'bottom-left': { x: paddingX, y: img.height - paddingY, align: 'left' as CanvasTextAlign, baseline: 'bottom' as CanvasTextBaseline },
+              'top-right': { x: img.width - paddingX, y: paddingY, align: 'right' as CanvasTextAlign, baseline: 'top' as CanvasTextBaseline },
+              'top-left': { x: paddingX, y: paddingY, align: 'left' as CanvasTextAlign, baseline: 'top' as CanvasTextBaseline },
+              'center': { x: img.width / 2, y: img.height / 2, align: 'center' as CanvasTextAlign, baseline: 'middle' as CanvasTextBaseline },
+            };
+            const currentPosition = positions[watermarkSettings.position as keyof typeof positions] || positions['bottom-right'];
+
             ctx.font = `bold ${fontSize}px Inter, sans-serif`;
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-            ctx.textAlign = 'right';
-            ctx.textBaseline = 'bottom';
-            
-            // Add shadow for better visibility
+            ctx.fillStyle = `rgba(255, 255, 255, ${watermarkSettings.opacity / 100})`;
+            ctx.textAlign = currentPosition.align;
+            ctx.textBaseline = currentPosition.baseline;
             ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
             ctx.shadowBlur = 6;
             ctx.shadowOffsetX = 2;
             ctx.shadowOffsetY = 2;
-            
-            // Padding from bottom right
-            const paddingX = img.width * 0.03;
-            const paddingY = img.height * 0.02;
-            
-            ctx.fillText(text, img.width - paddingX, img.height - paddingY);
+            ctx.fillText(text, currentPosition.x, currentPosition.y);
         }
 
         // Trigger download
@@ -211,9 +542,290 @@ const App: React.FC = () => {
     }
   };
 
+  const handleClearStoredApiKey = () => {
+    clearOpenRouterApiKey();
+    setError(null);
+    setNeedsApiKey(true);
+  };
+
+  const watermarkPreviewPositionClasses = {
+    'bottom-right': 'bottom-[3%] right-[3%]',
+    'bottom-left': 'bottom-[3%] left-[3%]',
+    'top-right': 'top-[3%] right-[3%]',
+    'top-left': 'top-[3%] left-[3%]',
+    'center': 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2',
+  };
+
   return (
     <div className="min-h-screen bg-[#1a1a1a] flex flex-col md:flex-row">
       {needsApiKey && <ApiKeyPrompt onKeySelected={() => setNeedsApiKey(false)} />}
+      {isModelManagerOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#222222] border border-[#333333] rounded-2xl shadow-xl max-w-3xl w-full p-6">
+            <div className="flex items-center justify-between gap-4 mb-6">
+              <div>
+                <h2 className="text-3xl font-bold text-slate-100">
+                  {modelForm.id ? 'Редактировать модель' : 'Новая модель'}
+                </h2>
+                <p className="text-slate-400 mt-1">
+                  Добавляйте новые OpenRouter модели генерации без изменения кода.
+                </p>
+              </div>
+              <button type="button" onClick={closeModelModal} className="text-slate-400 hover:text-slate-200 text-sm">
+                Закрыть
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-[1.3fr_0.7fr] gap-6">
+              <div className="space-y-5">
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Название</label>
+                  <input
+                    type="text"
+                    value={modelForm.label}
+                    onChange={(e) => setModelForm((current) => ({ ...current, label: e.target.value }))}
+                    placeholder="Например: GPT Image 1"
+                    className="w-full bg-[#2a2a2a] border border-[#333333] rounded-xl px-4 py-3 text-slate-200 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Эмодзи</label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="text"
+                      value={modelForm.icon}
+                      onChange={(e) => setModelForm((current) => ({ ...current, icon: e.target.value }))}
+                      placeholder="🧠"
+                      maxLength={8}
+                      className="flex-1 bg-[#2a2a2a] border border-[#333333] rounded-xl px-4 py-3 text-slate-200 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setEmojiPickerTarget((current) => current === 'model' ? null : 'model')}
+                      className="shrink-0 rounded-xl bg-[#2a2a2a] border border-[#333333] px-4 py-3 text-sm text-slate-200 hover:bg-[#333333]"
+                    >
+                      Выбрать эмодзи
+                    </button>
+                  </div>
+                  {emojiPickerTarget === 'model' && (
+                    <div className="mt-3 overflow-hidden rounded-2xl border border-[#333333]">
+                      <EmojiPicker
+                        onEmojiClick={handleEmojiSelect}
+                        autoFocusSearch={false}
+                        searchDisabled={false}
+                        skinTonesDisabled
+                        width="100%"
+                        height={360}
+                        lazyLoadEmojis
+                      />
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">OpenRouter model id</label>
+                  <input
+                    type="text"
+                    value={modelForm.modelId}
+                    onChange={(e) => setModelForm((current) => ({ ...current, modelId: e.target.value }))}
+                    placeholder="provider/model-name"
+                    className="w-full bg-[#2a2a2a] border border-[#333333] rounded-xl px-4 py-3 text-slate-200 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                </div>
+                {modelFormError && <p className="text-sm text-red-400">{modelFormError}</p>}
+                <div className="flex items-center gap-4">
+                  <button type="button" onClick={closeModelModal} className="flex-1 bg-[#333333] hover:bg-[#3a3a3a] text-slate-200 font-semibold py-3 rounded-xl transition-all">
+                    Отмена
+                  </button>
+                  <button type="button" onClick={handleSaveModel} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-xl transition-all">
+                    {modelForm.id ? 'Сохранить' : 'Добавить'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-[#1b1b1b] border border-[#333333] rounded-2xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-slate-200">Ваши модели</h3>
+                  <span className="text-xs text-slate-500">{customModels.length}</span>
+                </div>
+                <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1 custom-scrollbar">
+                  {customModels.length === 0 && (
+                    <p className="text-sm text-slate-500">
+                      Пользовательских моделей пока нет.
+                    </p>
+                  )}
+                  {customModels.map((model) => (
+                    <div key={model.id} className="rounded-xl border border-[#333333] bg-[#222222] p-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-lg">{model.icon}</span>
+                        <span className="text-sm font-medium text-slate-200 truncate">{model.label}</span>
+                      </div>
+                      <p className="text-xs text-slate-500 break-all">{model.id}</p>
+                      <div className="flex items-center gap-2 mt-3">
+                        <button type="button" onClick={() => openEditModelModal(model)} className="flex-1 rounded-lg bg-[#2a2a2a] border border-[#3a3a3a] py-2 text-xs text-slate-300 hover:bg-[#333333]">
+                          Изменить
+                        </button>
+                        <button type="button" onClick={() => handleDeleteModel(model.id)} className="flex-1 rounded-lg bg-[#2a2a2a] border border-red-900/40 py-2 text-xs text-red-300 hover:bg-red-900/20">
+                          Удалить
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {isStyleManagerOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#222222] border border-[#333333] rounded-2xl shadow-xl max-w-3xl w-full p-6">
+            <div className="flex items-center justify-between gap-4 mb-6">
+              <div>
+                <h2 className="text-3xl font-bold text-slate-100">
+                  {styleForm.id ? 'Редактировать стиль' : 'Новый стиль'}
+                </h2>
+                <p className="text-slate-400 mt-1">
+                  Добавляйте свои стили оформления и редактируйте их прямо в приложении.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeStyleModal}
+                className="text-slate-400 hover:text-slate-200 text-sm"
+              >
+                Закрыть
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-[1.3fr_0.7fr] gap-6">
+              <div className="space-y-5">
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Название</label>
+                  <input
+                    type="text"
+                    value={styleForm.label}
+                    onChange={(e) => setStyleForm((current) => ({ ...current, label: e.target.value }))}
+                    placeholder="Например: Космос"
+                    className="w-full bg-[#2a2a2a] border border-[#333333] rounded-xl px-4 py-3 text-slate-200 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Эмодзи</label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="text"
+                      value={styleForm.icon}
+                      onChange={(e) => setStyleForm((current) => ({ ...current, icon: e.target.value }))}
+                      placeholder="🎨"
+                      maxLength={8}
+                      className="flex-1 bg-[#2a2a2a] border border-[#333333] rounded-xl px-4 py-3 text-slate-200 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setEmojiPickerTarget((current) => current === 'style' ? null : 'style')}
+                      className="shrink-0 rounded-xl bg-[#2a2a2a] border border-[#333333] px-4 py-3 text-sm text-slate-200 hover:bg-[#333333]"
+                    >
+                      Выбрать эмодзи
+                    </button>
+                  </div>
+                  {emojiPickerTarget === 'style' && (
+                    <div className="mt-3 overflow-hidden rounded-2xl border border-[#333333]">
+                      <EmojiPicker
+                        onEmojiClick={handleEmojiSelect}
+                        autoFocusSearch={false}
+                        searchDisabled={false}
+                        skinTonesDisabled
+                        width="100%"
+                        height={360}
+                        lazyLoadEmojis
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Промпт</label>
+                  <textarea
+                    value={styleForm.prompt}
+                    onChange={(e) => setStyleForm((current) => ({ ...current, prompt: e.target.value }))}
+                    placeholder="Опишите стиль оформления..."
+                    className="w-full h-48 bg-[#2a2a2a] border border-[#333333] rounded-xl px-4 py-3 text-slate-200 placeholder:text-slate-500 outline-none resize-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                </div>
+
+                {styleFormError && <p className="text-sm text-red-400">{styleFormError}</p>}
+
+                <div className="flex items-center gap-4">
+                  <button
+                    type="button"
+                    onClick={closeStyleModal}
+                    className="flex-1 bg-[#333333] hover:bg-[#3a3a3a] text-slate-200 font-semibold py-3 rounded-xl transition-all"
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveStyle}
+                    className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-xl transition-all"
+                  >
+                    {styleForm.id ? 'Сохранить' : 'Добавить'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-[#1b1b1b] border border-[#333333] rounded-2xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-slate-200">Все стили</h3>
+                  <span className="text-xs text-slate-500">{allStyles.length}</span>
+                </div>
+                <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1 custom-scrollbar">
+                  {allStyles.map((style) => (
+                    <div key={style.id} className="rounded-xl border border-[#333333] bg-[#222222] p-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-lg">{style.icon}</span>
+                        <span className="text-sm font-medium text-slate-200 truncate">{style.label}</span>
+                        {style.isCustom ? (
+                          <span className="ml-auto text-[10px] uppercase tracking-wide text-emerald-400">Custom</span>
+                        ) : (
+                          <span className="ml-auto text-[10px] uppercase tracking-wide text-slate-500">Base</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-500 line-clamp-4">{style.prompt}</p>
+                      <div className="flex items-center gap-2 mt-3">
+                        <button
+                          type="button"
+                          onClick={() => openEditStyleModal(style)}
+                          className="flex-1 rounded-lg bg-[#2a2a2a] border border-[#3a3a3a] py-2 text-xs text-slate-300 hover:bg-[#333333]"
+                        >
+                          Изменить
+                        </button>
+                        {style.isCustom ? (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteStyle(style.id)}
+                            className="flex-1 rounded-lg bg-[#2a2a2a] border border-red-900/40 py-2 text-xs text-red-300 hover:bg-red-900/20"
+                          >
+                            Удалить
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleResetStyle(style.id)}
+                            className="flex-1 rounded-lg bg-[#2a2a2a] border border-amber-900/40 py-2 text-xs text-amber-300 hover:bg-amber-900/20"
+                          >
+                            Сбросить
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Sidebar / Input Area */}
       <div className="w-full md:w-1/3 lg:w-1/4 bg-[#222222] border-r border-[#333333] p-6 flex flex-col shadow-lg z-10 h-screen md:h-auto overflow-y-auto">
@@ -289,24 +901,60 @@ const App: React.FC = () => {
                 Стиль оформления
               </label>
               <div className="grid grid-cols-2 gap-2 max-h-[240px] overflow-y-auto custom-scrollbar pr-1">
-                {INFOGRAPHIC_STYLES.map((style) => (
+                <div className="col-span-2 flex items-center justify-between gap-2">
+                  <span className="text-xs text-slate-500">
+                    {customStyles.length > 0 ? `Пользовательских стилей: ${customStyles.length}` : 'Можно добавлять и редактировать свои стили'}
+                  </span>
                   <button
-                    key={style.id}
                     type="button"
-                    onClick={() => setSelectedStyle(style)}
+                    onClick={openCreateStyleModal}
                     disabled={isGenerating}
+                    className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                  >
+                    ⚙ Управление стилями
+                  </button>
+                </div>
+                {allStyles.map((style) => (
+                  <div
+                    key={style.id}
                     className={`
-                      p-2 rounded-lg text-xs font-medium border flex items-center gap-2 transition-all text-left
+                      rounded-lg border transition-all
                       ${selectedStyle.id === style.id
-                        ? 'bg-indigo-900/30 border-indigo-500/50 text-indigo-300 ring-1 ring-indigo-500/50'
-                        : 'bg-[#2a2a2a] border-[#333333] text-slate-400 hover:bg-[#333333] hover:text-slate-200'}
-                      ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}
+                        ? 'bg-indigo-900/30 border-indigo-500/50 ring-1 ring-indigo-500/50'
+                        : 'bg-[#2a2a2a] border-[#333333]'}
                     `}
                   >
-                    <span className="text-base">{style.icon}</span>
-                    {style.label}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedStyle(style)}
+                      disabled={isGenerating}
+                      className={`
+                        w-full p-2 rounded-lg text-xs font-medium flex items-center gap-2 transition-all text-left
+                        ${selectedStyle.id === style.id
+                          ? 'text-indigo-300'
+                          : 'text-slate-400 hover:bg-[#333333] hover:text-slate-200'}
+                        ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}
+                      `}
+                    >
+                      <span className="text-base">{style.icon}</span>
+                      <span className="truncate flex-1">{style.label}</span>
+                      {style.isCustom && (
+                        <span className="text-[10px] uppercase tracking-wide text-emerald-400">Custom</span>
+                      )}
+                      {!style.isCustom && styleOverrides.some((override) => override.id === style.id) && (
+                        <span className="text-[10px] uppercase tracking-wide text-amber-400">Edited</span>
+                      )}
+                    </button>
+                  </div>
                 ))}
+                <button
+                  type="button"
+                  onClick={openCreateStyleModal}
+                  disabled={isGenerating}
+                  className="col-span-2 mt-1 w-full rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3 transition-all"
+                >
+                  + Добавить стиль
+                </button>
               </div>
             </div>
 
@@ -314,8 +962,21 @@ const App: React.FC = () => {
                <label className="block text-sm font-medium text-slate-300 mb-2">
                 Модель генерации
               </label>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-slate-500">
+                  Базовые и пользовательские OpenRouter модели
+                </span>
+                <button
+                  type="button"
+                  onClick={openCreateModelModal}
+                  disabled={isGenerating}
+                  className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                >
+                  ⚙ Управление моделями
+                </button>
+              </div>
               <div className="grid grid-cols-1 gap-2">
-                {MODELS.map((model) => (
+                {allModels.map((model) => (
                   <button
                     key={model.id}
                     type="button"
@@ -328,14 +989,25 @@ const App: React.FC = () => {
                         : 'bg-[#2a2a2a] border-[#333333] text-slate-400 hover:bg-[#333333] hover:text-slate-200'}
                       ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}
                     `}
-                  >
+                    >
                     <span className="text-lg">{model.icon}</span>
                     <div className="flex flex-col items-start">
-                      <span>{model.label}</span>
+                      <span className="flex items-center gap-2">
+                        {model.label}
+                        {model.isCustom && <span className="text-[10px] uppercase tracking-wide text-emerald-400">Custom</span>}
+                      </span>
                       <span className="text-[10px] opacity-60">{model.id}</span>
                     </div>
                   </button>
                 ))}
+                <button
+                  type="button"
+                  onClick={openCreateModelModal}
+                  disabled={isGenerating}
+                  className="w-full rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3 transition-all"
+                >
+                  + Добавить модель
+                </button>
               </div>
             </div>
 
@@ -365,6 +1037,73 @@ const App: React.FC = () => {
                     </div>
                   </button>
                 ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-slate-300">
+                  Watermark
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setWatermarkSettings((current) => ({ ...current, enabled: !current.enabled }))}
+                  className={`text-xs px-2 py-1 rounded-md border transition-all ${
+                    watermarkSettings.enabled
+                      ? 'bg-emerald-600/20 border-emerald-500/40 text-emerald-300'
+                      : 'bg-[#2a2a2a] border-[#333333] text-slate-400'
+                  }`}
+                >
+                  {watermarkSettings.enabled ? 'Включен' : 'Выключен'}
+                </button>
+              </div>
+              <div className="space-y-3 rounded-xl border border-[#333333] bg-[#2a2a2a] p-3">
+                <input
+                  type="text"
+                  value={watermarkSettings.text}
+                  onChange={(e) => setWatermarkSettings((current) => ({ ...current, text: e.target.value }))}
+                  placeholder="@yourbrand"
+                  className="w-full bg-[#1f1f1f] border border-[#3a3a3a] rounded-lg px-3 py-2 text-sm text-slate-200 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  disabled={!watermarkSettings.enabled}
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { id: 'bottom-right', label: 'Справа снизу' },
+                    { id: 'bottom-left', label: 'Слева снизу' },
+                    { id: 'top-right', label: 'Справа сверху' },
+                    { id: 'top-left', label: 'Слева сверху' },
+                    { id: 'center', label: 'По центру' },
+                  ].map((position) => (
+                    <button
+                      key={position.id}
+                      type="button"
+                      onClick={() => setWatermarkSettings((current) => ({ ...current, position: position.id }))}
+                      disabled={!watermarkSettings.enabled}
+                      className={`rounded-lg border px-3 py-2 text-[11px] transition-all ${
+                        watermarkSettings.position === position.id
+                          ? 'bg-indigo-900/30 border-indigo-500/50 text-indigo-300'
+                          : 'bg-[#1f1f1f] border-[#3a3a3a] text-slate-400 hover:bg-[#2a2a2a] hover:text-slate-200'
+                      }`}
+                    >
+                      {position.label}
+                    </button>
+                  ))}
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-slate-400">Прозрачность</span>
+                    <span className="text-xs text-slate-500">{watermarkSettings.opacity}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="20"
+                    max="100"
+                    value={watermarkSettings.opacity}
+                    onChange={(e) => setWatermarkSettings((current) => ({ ...current, opacity: Number(e.target.value) }))}
+                    className="w-full"
+                    disabled={!watermarkSettings.enabled}
+                  />
+                </div>
               </div>
             </div>
 
@@ -484,12 +1223,22 @@ const App: React.FC = () => {
               <div className="text-red-500 text-3xl mb-3">⚠️</div>
               <h3 className="text-red-400 font-medium mb-1">Ошибка</h3>
               <p className="text-red-300 text-sm">{error}</p>
-              <button 
-                onClick={() => setError(null)}
-                className="mt-4 text-xs font-semibold text-red-400 hover:text-red-300 underline"
-              >
-                Закрыть
-              </button>
+              <div className="mt-4 flex items-center justify-center gap-3">
+                {error.includes('API Key Error') && (
+                  <button 
+                    onClick={handleClearStoredApiKey}
+                    className="text-xs font-semibold text-amber-300 hover:text-amber-200 underline"
+                  >
+                    Очистить текущий ключ
+                  </button>
+                )}
+                <button 
+                  onClick={() => setError(null)}
+                  className="text-xs font-semibold text-red-400 hover:text-red-300 underline"
+                >
+                  Закрыть
+                </button>
+              </div>
             </div>
           )}
 
@@ -505,10 +1254,17 @@ const App: React.FC = () => {
                     style={{ aspectRatio: generatedImage.aspectRatio ? generatedImage.aspectRatio.replace(':', '/') : '3/4' }}
                  />
                  
-                 {/* Watermark Overlay */}
-                 <div className="absolute bottom-[3%] right-[3%] text-white/90 font-bold text-xl drop-shadow-md pointer-events-none select-none" style={{ textShadow: '0 2px 4px rgba(0,0,0,0.8)' }}>
-                   @newsregions
-                 </div>
+                 {watermarkSettings.enabled && watermarkSettings.text.trim() && (
+                   <div
+                     className={`absolute ${watermarkPreviewPositionClasses[watermarkSettings.position as keyof typeof watermarkPreviewPositionClasses] || watermarkPreviewPositionClasses['bottom-right']} text-xl font-bold drop-shadow-md pointer-events-none select-none`}
+                     style={{
+                       color: `rgba(255,255,255,${watermarkSettings.opacity / 100})`,
+                       textShadow: '0 2px 4px rgba(0,0,0,0.8)',
+                     }}
+                   >
+                     {watermarkSettings.text}
+                   </div>
+                 )}
 
                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
               </div>

@@ -5,6 +5,21 @@ export interface GeneratedImage {
   aspectRatio: string;
 }
 
+export interface InfographicStyle {
+  id: string;
+  label: string;
+  icon: string;
+  prompt: string;
+  isCustom?: boolean;
+}
+
+export interface GenerationModel {
+  id: string;
+  label: string;
+  icon: string;
+  isCustom?: boolean;
+}
+
 export interface ApiError {
   message: string;
 }

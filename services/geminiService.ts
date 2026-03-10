@@ -55,6 +55,26 @@ const getResponseErrorMessage = async (response: Response): Promise<string> => {
   }
 };
 
+const normalizeOpenRouterError = (message?: string): string => {
+  if (!message) {
+    return 'Произошла ошибка при обращении к OpenRouter.';
+  }
+
+  if (/user not found/i.test(message)) {
+    return 'API Key Error: Пользователь OpenRouter не найден. Проверьте ключ или создайте новый.';
+  }
+
+  if (/401|403|api key|unauthorized|invalid key|invalid api key/i.test(message)) {
+    return 'API Key Error: Проверьте OpenRouter API key.';
+  }
+
+  if (/rate limit/i.test(message)) {
+    return 'OpenRouter временно ограничил запросы. Попробуйте позже.';
+  }
+
+  return message;
+};
+
 const openRouterRequest = async (payload: Record<string, unknown>) => {
   const apiKey = getOpenRouterApiKey();
 
@@ -126,10 +146,7 @@ export const generateInfographic = async (topic: string, styleDescription: strin
 
   } catch (error: any) {
     console.error('OpenRouter image generation error:', error);
-    if (error.message && /401|403|api key|unauthorized/i.test(error.message)) {
-      throw new Error('API Key Error: Проверьте OpenRouter API key.');
-    }
-    throw new Error(error.message || 'Failed to generate infographic.');
+    throw new Error(normalizeOpenRouterError(error.message));
   }
 };
 
@@ -163,10 +180,7 @@ export const rewriteText = async (text: string): Promise<string> => {
     return rewrittenText;
   } catch (error: any) {
     console.error('Rewrite Error:', error);
-    if (error.message && /401|403|api key|unauthorized/i.test(error.message)) {
-      throw new Error('API Key Error: Проверьте OpenRouter API key.');
-    }
-    throw new Error(error.message || 'Failed to rewrite text.');
+    throw new Error(normalizeOpenRouterError(error.message));
   }
 };
 
