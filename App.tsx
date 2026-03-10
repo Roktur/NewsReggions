@@ -557,7 +557,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#1a1a1a] flex flex-col md:flex-row">
+    <div className="h-screen bg-[#1a1a1a] flex flex-col md:flex-row overflow-hidden">
       {needsApiKey && <ApiKeyPrompt onKeySelected={() => setNeedsApiKey(false)} />}
       {isModelManagerOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -828,7 +828,7 @@ const App: React.FC = () => {
       )}
 
       {/* Sidebar / Input Area */}
-      <div className="w-full md:w-1/3 lg:w-1/4 bg-[#222222] border-r border-[#333333] p-6 flex flex-col shadow-lg z-10 h-screen md:h-auto overflow-y-auto">
+      <div className="w-full md:w-1/3 lg:w-1/4 bg-[#222222] border-r border-[#333333] p-6 flex flex-col shadow-lg z-10 h-screen md:h-screen min-h-0 overflow-y-auto">
         <header className="mb-6">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-2xl">📰</span>
@@ -866,7 +866,8 @@ const App: React.FC = () => {
         </header>
 
         {activeTab === 'infographic' ? (
-          <form onSubmit={handleSubmit} className="flex-grow flex flex-col gap-4">
+          <form onSubmit={handleSubmit} className="flex-grow min-h-0 flex flex-col">
+            <div className="flex-grow min-h-0 overflow-y-auto pr-1 space-y-4 custom-scrollbar">
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label htmlFor="topic" className="block text-sm font-medium text-slate-300">
@@ -1106,29 +1107,33 @@ const App: React.FC = () => {
                 </div>
               </div>
             </div>
+            </div>
 
-            <button
-              type="submit"
-              disabled={!topic.trim() || isGenerating}
-              className={`
-                mt-4 w-full py-4 rounded-xl font-semibold shadow-md transition-all flex items-center justify-center gap-2
-                ${!topic.trim() || isGenerating 
-                  ? 'bg-[#2a2a2a] text-slate-500 cursor-not-allowed' 
-                  : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0'}
-              `}
-            >
-              {isGenerating ? (
-                'Генерируем...'
-              ) : (
-                <>
-                  <span>✨</span> Создать
-                </>
-              )}
-            </button>
+            <div className="sticky bottom-0 mt-4 pt-6 bg-gradient-to-t from-[#222222] via-[#222222] to-[#222222]/0 border-t border-[#333333]">
+              <button
+                type="submit"
+                disabled={!topic.trim() || isGenerating}
+                className={`
+                  w-full py-4 rounded-xl font-semibold shadow-md transition-all flex items-center justify-center gap-2
+                  ${!topic.trim() || isGenerating 
+                    ? 'bg-[#2a2a2a] text-slate-500 cursor-not-allowed' 
+                    : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0'}
+                `}
+              >
+                {isGenerating ? (
+                  'Генерируем...'
+                ) : (
+                  <>
+                    <span>✨</span> Создать
+                  </>
+                )}
+              </button>
+            </div>
           </form>
         ) : (
           /* Rewrite Mode Sidebar */
-          <form onSubmit={handleRewriteSubmit} className="flex-grow flex flex-col gap-4">
+          <form onSubmit={handleRewriteSubmit} className="flex-grow min-h-0 flex flex-col">
+            <div className="flex-grow min-h-0 overflow-y-auto pr-1 space-y-4 custom-scrollbar">
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label htmlFor="rewriteInput" className="block text-sm font-medium text-slate-300">
@@ -1154,25 +1159,28 @@ const App: React.FC = () => {
                 disabled={isGenerating}
               />
             </div>
+            </div>
 
-            <button
-              type="submit"
-              disabled={!rewriteInput.trim() || isGenerating}
-              className={`
-                mt-auto w-full py-4 rounded-xl font-semibold shadow-md transition-all flex items-center justify-center gap-2
-                ${!rewriteInput.trim() || isGenerating 
-                  ? 'bg-[#2a2a2a] text-slate-500 cursor-not-allowed' 
-                  : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0'}
-              `}
-            >
-              {isGenerating ? (
-                'Переписываем...'
-              ) : (
-                <>
-                  <span>📝</span> Переписать
-                </>
-              )}
-            </button>
+            <div className="sticky bottom-0 mt-4 pt-6 bg-gradient-to-t from-[#222222] via-[#222222] to-[#222222]/0 border-t border-[#333333]">
+              <button
+                type="submit"
+                disabled={!rewriteInput.trim() || isGenerating}
+                className={`
+                  w-full py-4 rounded-xl font-semibold shadow-md transition-all flex items-center justify-center gap-2
+                  ${!rewriteInput.trim() || isGenerating 
+                    ? 'bg-[#2a2a2a] text-slate-500 cursor-not-allowed' 
+                    : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0'}
+                `}
+              >
+                {isGenerating ? (
+                  'Переписываем...'
+                ) : (
+                  <>
+                    <span>📝</span> Переписать
+                  </>
+                )}
+              </button>
+            </div>
           </form>
         )}
 
